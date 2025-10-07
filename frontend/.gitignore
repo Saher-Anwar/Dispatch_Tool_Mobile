@@ -10,8 +10,9 @@ npm-debug.*
 *.orig.*
 web-build/
 
-
-
+# Env files
+.env
+.env.*
 
 ios
 android
