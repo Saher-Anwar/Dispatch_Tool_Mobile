@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, Alert, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, Alert, StyleSheet, Share } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import Mapbox, { MapView, Camera, UserLocation, ShapeSource, LineLayer } from '@rnmapbox/maps';
 import mapboxClient from '@mapbox/mapbox-sdk';
 import mapboxDirections from '@mapbox/mapbox-sdk/services/directions';
+import { LocationSharingService } from '../services/locationSharingService';
 
 const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN;
 
@@ -26,9 +27,12 @@ export const NavigationScreen = () => {
   const [isNavigating, setIsNavigating] = useState(false);
   const [routeData, setRouteData] = useState<any>(null);
   const [permissionGranted, setPermissionGranted] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
+  const [shareLink, setShareLink] = useState<string | null>(null);
   
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
   const directionsClient = mapboxDirections(mapboxClient({ accessToken: MAPBOX_ACCESS_TOKEN }));
+  const locationSharingService = LocationSharingService.getInstance();
 
   useEffect(() => {
     const initLocation = async () => {
@@ -121,7 +125,13 @@ export const NavigationScreen = () => {
           distanceInterval: 5,
         },
         (location) => {
-          setCurrentLocation([location.coords.longitude, location.coords.latitude]);
+          const newLocation: [number, number] = [location.coords.longitude, location.coords.latitude];
+          setCurrentLocation(newLocation);
+          
+          // Update shared location if sharing is active
+          if (isSharing && destination) {
+            updateSharedLocation(newLocation, location.coords.speed || 0, location.coords.heading || 0);
+          }
         }
       );
       setIsNavigating(true);
@@ -138,7 +148,118 @@ export const NavigationScreen = () => {
       locationSubscription.current = null;
     }
     setIsNavigating(false);
+    
+    // Stop sharing if active
+    if (isSharing) {
+      stopLocationSharing();
+    }
+    
     Alert.alert('Navigation Stopped', 'Location tracking has been stopped.');
+  };
+
+  const startLocationSharing = async () => {
+    console.log('🔵 Starting location sharing...');
+    console.log('📍 Current location:', currentLocation);
+    console.log('🎯 Destination:', destination);
+    
+    if (!destination || !currentLocation) {
+      Alert.alert('Error', 'Current location not available. Please wait for GPS to initialize.');
+      return;
+    }
+
+    try {
+      console.log('🔥 Creating trip in Firebase...');
+      const tripId = await locationSharingService.startSharing({
+        lat: destination.coordinates[1],
+        lng: destination.coordinates[0],
+        address: destination.address,
+      });
+      console.log('✅ Trip created with ID:', tripId);
+
+      // Immediately add current location to the trip data
+      console.log('📡 Updating location data...');
+      await locationSharingService.updateLocation({
+        currentLocation: {
+          lat: currentLocation[1],
+          lng: currentLocation[0],
+          accuracy: 5,
+        },
+        destination: {
+          lat: destination.coordinates[1],
+          lng: destination.coordinates[0],
+          address: destination.address,
+        },
+        status: 'en_route',
+        speed: 0,
+        heading: 0,
+      });
+      console.log('✅ Location data updated');
+
+      const link = locationSharingService.generateShareLink(tripId);
+      setShareLink(link);
+      setIsSharing(true);
+
+      console.log('🔗 Generated share link:', link);
+
+      // Share the link
+      await Share.share({
+        message: `Track my location in real-time: ${link}`,
+        title: 'Live Location Sharing',
+      });
+
+    } catch (error) {
+      console.error('🚨 Error starting location sharing:', error);
+      Alert.alert('Error', 'Failed to start location sharing');
+    }
+  };
+
+  const stopLocationSharing = async () => {
+    try {
+      await locationSharingService.stopSharing();
+      setIsSharing(false);
+      setShareLink(null);
+      Alert.alert('Sharing Stopped', 'Location sharing has been stopped.');
+    } catch (error) {
+      console.error('Error stopping location sharing:', error);
+    }
+  };
+
+  const updateSharedLocation = async (location: [number, number], speed: number, heading: number) => {
+    if (!destination || !routeData) return;
+
+    try {
+      // Calculate remaining distance and ETA
+      const { remainingDistance, progress } = locationSharingService.calculateRouteProgress(
+        location[1], // lat
+        location[0], // lng
+        destination.coordinates[1], // dest lat
+        destination.coordinates[0], // dest lng
+        routeData.geometry?.coordinates?.length ? 
+          routeData.geometry.coordinates.length * 100 : 1000 // estimated total distance
+      );
+
+      const estimatedTimeRemaining = speed > 0 ? (remainingDistance / (speed * 0.44704)) : 0; // Convert mph to m/s
+
+      await locationSharingService.updateLocation({
+        currentLocation: {
+          lat: location[1],
+          lng: location[0],
+          accuracy: 5,
+        },
+        route: {
+          totalDistance: routeData.geometry?.coordinates?.length ? 
+            routeData.geometry.coordinates.length * 100 : 1000,
+          remainingDistance,
+          estimatedDuration: 0, // Would need route API for this
+          remainingDuration: estimatedTimeRemaining,
+        },
+        status: 'en_route',
+        speed,
+        heading,
+      });
+    } catch (error) {
+      console.error('Error updating shared location:', error);
+    }
   };
 
   if (!permissionGranted) {
@@ -219,6 +340,38 @@ export const NavigationScreen = () => {
             <Text className={styles.buttonText}>Stop Navigation</Text>
           </TouchableOpacity>
         )}
+        
+        {/* Location Sharing Controls */}
+        <View className={styles.sharingControls}>
+          {!isSharing ? (
+            <TouchableOpacity 
+              className={styles.shareButton}
+              onPress={startLocationSharing}
+            >
+              <Text className={styles.buttonText}>Share Location</Text>
+            </TouchableOpacity>
+          ) : (
+            <View className={styles.sharingActive}>
+              <TouchableOpacity 
+                className={styles.stopShareButton}
+                onPress={stopLocationSharing}
+              >
+                <Text className={styles.buttonText}>Stop Sharing</Text>
+              </TouchableOpacity>
+              {shareLink && (
+                <TouchableOpacity 
+                  className={styles.shareAgainButton}
+                  onPress={() => Share.share({
+                    message: `Track my location: ${shareLink}`,
+                    title: 'Live Location'
+                  })}
+                >
+                  <Text className={styles.buttonText}>Share Link Again</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+        </View>
       </View>
     </View>
   );
@@ -234,7 +387,12 @@ const styles = {
   destinationAddress: `text-base font-semibold text-gray-800 mt-1`,
   controls: `absolute bottom-8 left-4 right-4 z-10`,
   button: `bg-blue-600 py-3 px-6 rounded-lg`,
-  startButton: `bg-green-600 py-4 px-6 rounded-lg`,
-  stopButton: `bg-red-600 py-4 px-6 rounded-lg`,
+  startButton: `bg-green-600 py-4 px-6 rounded-lg mb-3`,
+  stopButton: `bg-red-600 py-4 px-6 rounded-lg mb-3`,
+  sharingControls: `mt-2`,
+  shareButton: `bg-blue-600 py-3 px-6 rounded-lg`,
+  sharingActive: `flex-row gap-2`,
+  stopShareButton: `bg-orange-600 py-3 px-4 rounded-lg flex-1`,
+  shareAgainButton: `bg-blue-500 py-3 px-4 rounded-lg flex-1`,
   buttonText: `text-white text-center font-semibold text-base`,
 };

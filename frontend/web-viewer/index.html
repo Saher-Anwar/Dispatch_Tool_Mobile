@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Location Tracking</title>
+    <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+        }
+        
+        .header {
+            background: #1976D2;
+            color: white;
+            padding: 1rem;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        
+        .container {
+            display: flex;
+            height: calc(100vh - 80px);
+        }
+        
+        #map {
+            flex: 1;
+            min-height: 400px;
+        }
+        
+        .sidebar {
+            width: 320px;
+            background: white;
+            padding: 1.5rem;
+            box-shadow: -2px 0 4px rgba(0,0,0,0.1);
+            overflow-y: auto;
+        }
+        
+        .status-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid #28a745;
+        }
+        
+        .status-card.offline {
+            border-left-color: #dc3545;
+        }
+        
+        .info-item {
+            margin-bottom: 0.75rem;
+        }
+        
+        .info-label {
+            font-size: 0.875rem;
+            color: #666;
+            margin-bottom: 0.25rem;
+        }
+        
+        .info-value {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .progress-bar {
+            background: #e9ecef;
+            border-radius: 4px;
+            height: 8px;
+            overflow: hidden;
+            margin-top: 0.5rem;
+        }
+        
+        .progress-fill {
+            background: #28a745;
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        
+        .eta-container {
+            background: #e3f2fd;
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+        
+        .eta-time {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #1976D2;
+        }
+        
+        .last-update {
+            font-size: 0.75rem;
+            color: #999;
+            text-align: center;
+            padding: 0.5rem;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+        
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #1976D2;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+            
+            .sidebar {
+                width: 100%;
+                max-height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Live Location Tracking</h1>
+    </div>
+    
+    <div id="loading" class="loading">
+        <div class="spinner"></div>
+        <p>Loading location data...</p>
+    </div>
+    
+    <div id="main-content" class="container" style="display: none;">
+        <div id="map"></div>
+        
+        <div class="sidebar">
+            <div id="status-card" class="status-card">
+                <div class="info-item">
+                    <div class="info-label">Status</div>
+                    <div class="info-value" id="status">Connecting...</div>
+                </div>
+            </div>
+            
+            <div class="eta-container">
+                <div class="info-label">Estimated Arrival</div>
+                <div class="eta-time" id="eta">Calculating...</div>
+            </div>
+            
+            <div class="info-item">
+                <div class="info-label">Destination</div>
+                <div class="info-value" id="destination">Loading...</div>
+            </div>
+            
+            <div class="info-item">
+                <div class="info-label">Distance Remaining</div>
+                <div class="info-value" id="distance">Calculating...</div>
+            </div>
+            
+            <div class="info-item">
+                <div class="info-label">Current Speed</div>
+                <div class="info-value" id="speed">- mph</div>
+            </div>
+            
+            <div class="info-item">
+                <div class="info-label">Progress</div>
+                <div class="info-value" id="progress-text">0%</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-bar" style="width: 0%"></div>
+                </div>
+            </div>
+            
+            <div class="last-update" id="last-update">
+                Last updated: Never
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        // Firebase configuration - replace with your actual config
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js';
+        import { getDatabase, ref, onValue } from 'https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js';
+
+        const firebaseConfig = {
+          apiKey: "AIzaSyBPR5Pc66pmuWcgR7rtXAx0EEMG74wQb40",
+          authDomain: "triguard-6141b.firebaseapp.com",
+          databaseURL: "https://triguard-6141b-default-rtdb.firebaseio.com/",
+          projectId: "triguard-6141b",
+          storageBucket: "triguard-6141b.firebasestorage.app",
+          messagingSenderId: "239370858429",
+          appId: "1:239370858429:web:30004d4c9ab2012a8e6cd4",
+          measurementId: "G-TYG2PK20CW"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const database = getDatabase(app);
+
+        // Mapbox configuration - use PUBLIC token for web
+        mapboxgl.accessToken = 'pk.eyJ1Ijoic2FoZXJhbndhciIsImEiOiJjbWdmMHoyZWkwMHRkMm9vcG1mMzN1eXkyIn0.-F9FQrAPgai3rRlOUrkeXg';
+
+        let map;
+        let userMarker;
+        let destinationMarker;
+        let routeSource;
+
+        // Get trip ID from URL
+        const tripId = window.location.pathname.split('/').pop();
+        
+        if (!tripId || tripId === 'index.html') {
+            document.getElementById('loading').innerHTML = '<h2>Invalid tracking link</h2><p>Please check your URL.</p>';
+            throw new Error('No trip ID provided');
+        }
+
+        // Initialize map
+        function initMap(lat = 40.7589, lng = -73.9851) {
+            map = new mapboxgl.Map({
+                container: 'map',
+                style: 'mapbox://styles/mapbox/streets-v11',
+                center: [lng, lat],
+                zoom: 14
+            });
+
+            map.addControl(new mapboxgl.NavigationControl());
+            
+            map.on('load', () => {
+                // Add route source
+                map.addSource('route', {
+                    type: 'geojson',
+                    data: {
+                        type: 'Feature',
+                        properties: {},
+                        geometry: {
+                            type: 'LineString',
+                            coordinates: []
+                        }
+                    }
+                });
+
+                map.addLayer({
+                    id: 'route',
+                    type: 'line',
+                    source: 'route',
+                    layout: {
+                        'line-join': 'round',
+                        'line-cap': 'round'
+                    },
+                    paint: {
+                        'line-color': '#1976D2',
+                        'line-width': 5,
+                        'line-opacity': 0.8
+                    }
+                });
+            });
+        }
+
+        let lastRouteUpdate = null;
+
+        // Calculate route using Mapbox Directions API
+        async function calculateRoute(startLng, startLat, endLng, endLat) {
+            try {
+                const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${startLng},${startLat};${endLng},${endLat}?geometries=geojson&access_token=${mapboxgl.accessToken}`;
+                
+                console.log('🛣️ Calculating route...');
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.routes && data.routes.length > 0) {
+                    const route = data.routes[0];
+                    console.log('✅ Route calculated:', route.distance, 'meters');
+                    
+                    // Update route on map
+                    if (map.getSource('route')) {
+                        map.getSource('route').setData({
+                            type: 'Feature',
+                            properties: {},
+                            geometry: route.geometry
+                        });
+                    }
+                    
+                    return route;
+                } else {
+                    console.log('❌ No route found');
+                    return null;
+                }
+            } catch (error) {
+                console.error('🚨 Route calculation error:', error);
+                return null;
+            }
+        }
+
+        // Update map with location data
+        function updateMap(data) {
+            if (!data.currentLocation) return;
+
+            const { lat, lng } = data.currentLocation;
+            
+            // Update or create user marker
+            if (userMarker) {
+                userMarker.setLngLat([lng, lat]);
+            } else {
+                userMarker = new mapboxgl.Marker({ color: '#1976D2' })
+                    .setLngLat([lng, lat])
+                    .setPopup(new mapboxgl.Popup().setHTML('<div>Current Location</div>'))
+                    .addTo(map);
+            }
+
+            // Update or create destination marker
+            if (data.destination && !destinationMarker) {
+                destinationMarker = new mapboxgl.Marker({ color: '#dc3545' })
+                    .setLngLat([data.destination.lng, data.destination.lat])
+                    .setPopup(new mapboxgl.Popup().setHTML(`<div>${data.destination.address}</div>`))
+                    .addTo(map);
+            }
+
+            // Calculate route if we have both points and haven't calculated recently
+            if (data.destination && map.getSource('route')) {
+                const routeKey = `${lng},${lat}-${data.destination.lng},${data.destination.lat}`;
+                if (lastRouteUpdate !== routeKey) {
+                    lastRouteUpdate = routeKey;
+                    calculateRoute(lng, lat, data.destination.lng, data.destination.lat);
+                }
+            }
+
+            // Center map to show both points
+            if (data.destination) {
+                const bounds = new mapboxgl.LngLatBounds()
+                    .extend([lng, lat])
+                    .extend([data.destination.lng, data.destination.lat]);
+                
+                map.fitBounds(bounds, {
+                    padding: 50,
+                    duration: 1000
+                });
+            } else {
+                // Just center on user location
+                map.easeTo({
+                    center: [lng, lat],
+                    zoom: 15,
+                    duration: 1000
+                });
+            }
+        }
+
+        // Update UI elements
+        function updateUI(data) {
+            const statusCard = document.getElementById('status-card');
+            const statusEl = document.getElementById('status');
+            const etaEl = document.getElementById('eta');
+            const destinationEl = document.getElementById('destination');
+            const distanceEl = document.getElementById('distance');
+            const speedEl = document.getElementById('speed');
+            const progressTextEl = document.getElementById('progress-text');
+            const progressBarEl = document.getElementById('progress-bar');
+            const lastUpdateEl = document.getElementById('last-update');
+
+            // Update status
+            const statusMap = {
+                'started': 'Trip Started',
+                'en_route': 'En Route',
+                'arrived': 'Arrived',
+                'stopped': 'Trip Ended'
+            };
+            
+            statusEl.textContent = statusMap[data.status] || 'Unknown';
+            statusCard.className = `status-card ${data.status === 'stopped' ? 'offline' : ''}`;
+
+            // Update destination
+            if (data.destination) {
+                destinationEl.textContent = data.destination.address;
+            }
+
+            // Update route info
+            if (data.route) {
+                const { remainingDistance, remainingDuration, totalDistance } = data.route;
+                
+                // Distance
+                const distanceKm = (remainingDistance / 1000).toFixed(1);
+                distanceEl.textContent = `${distanceKm} km`;
+                
+                // ETA
+                if (remainingDuration > 0) {
+                    const minutes = Math.round(remainingDuration / 60);
+                    etaEl.textContent = minutes > 0 ? `${minutes} min` : '< 1 min';
+                } else {
+                    etaEl.textContent = 'Calculating...';
+                }
+                
+                // Progress
+                const progress = totalDistance > 0 ? 
+                    Math.max(0, Math.min(100, ((totalDistance - remainingDistance) / totalDistance) * 100)) : 0;
+                progressTextEl.textContent = `${Math.round(progress)}%`;
+                progressBarEl.style.width = `${progress}%`;
+            }
+
+            // Speed
+            if (data.speed !== undefined) {
+                const speedMph = (data.speed * 2.237).toFixed(0); // Convert m/s to mph
+                speedEl.textContent = `${speedMph} mph`;
+            }
+
+            // Last update
+            const now = new Date();
+            lastUpdateEl.textContent = `Last updated: ${now.toLocaleTimeString()}`;
+        }
+
+        // Listen for location updates
+        function subscribeToTrip() {
+            console.log('🔍 Subscribing to trip:', tripId);
+            const tripRef = ref(database, `trips/${tripId}`);
+            
+            onValue(tripRef, (snapshot) => {
+                console.log('📡 Firebase snapshot received:', snapshot.exists());
+                const data = snapshot.val();
+                console.log('📊 Trip data:', data);
+                
+                if (data) {
+                    console.log('✅ Data found, updating UI');
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('main-content').style.display = 'flex';
+                    
+                    if (!map) {
+                        const lat = data.currentLocation?.lat || data.destination?.lat || 40.7589;
+                        const lng = data.currentLocation?.lng || data.destination?.lng || -73.9851;
+                        console.log('🗺️ Initializing map at:', lat, lng);
+                        initMap(lat, lng);
+                    }
+                    
+                    updateMap(data);
+                    updateUI(data);
+                } else {
+                    console.log('❌ No data found for trip:', tripId);
+                    document.getElementById('loading').innerHTML = 
+                        '<h2>Trip not found</h2><p>This tracking link may be expired or invalid.</p>';
+                }
+            }, (error) => {
+                console.error('🚨 Firebase error:', error);
+                document.getElementById('loading').innerHTML = 
+                    '<h2>Connection Error</h2><p>Unable to load tracking data. Please try again later.</p>';
+            });
+        }
+
+        // Start tracking
+        subscribeToTrip();
+    </script>
+</body>
+</html>
