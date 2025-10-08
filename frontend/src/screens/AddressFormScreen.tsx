@@ -1,20 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, Alert } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import mapboxClient from '@mapbox/mapbox-sdk';
 import mapboxGeocoding from '@mapbox/mapbox-sdk/services/geocoding';
 
-const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN || 'pk.eyJ1Ijoic2FoZXJhbndhciIsImEiOiJjbWdmMHoyZWkwMHRkMm9vcG1mMzN1eXkyIn0.-F9FQrAPgai3rRlOUrkeXg';
+const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN;
 
 interface AddressSuggestion {
   id: string;
   place_name: string;
   text: string;
+  center?: [number, number];
 }
 
 export const AddressFormScreen = () => {
+  const navigation = useNavigation();
   const [address, setAddress] = useState('');
   const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
-  const [selectedAddress, setSelectedAddress] = useState('');
+  const [selectedAddress, setSelectedAddress] = useState<AddressSuggestion | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   const geocodingClient = mapboxGeocoding(mapboxClient({ accessToken: MAPBOX_ACCESS_TOKEN }));
@@ -39,6 +42,7 @@ export const AddressFormScreen = () => {
         id: feature.id,
         place_name: feature.place_name,
         text: feature.text,
+        center: feature.center,
       }));
 
       setSuggestions(results);
@@ -61,17 +65,23 @@ export const AddressFormScreen = () => {
   }, [address]);
 
   const handleAddressSelect = (suggestion: AddressSuggestion) => {
-    setSelectedAddress(suggestion.place_name);
+    setSelectedAddress(suggestion);
     setAddress(suggestion.place_name);
     setSuggestions([]);
   };
 
   const handleSubmit = () => {
-    if (!selectedAddress) {
-      Alert.alert('Error', 'Please select an address');
+    if (!selectedAddress || !selectedAddress.center) {
+      Alert.alert('Error', 'Please select an address with valid coordinates');
       return;
     }
-    Alert.alert('Success', `Selected address: ${selectedAddress}`);
+    
+    navigation.navigate('Navigation' as never, {
+      destination: {
+        coordinates: selectedAddress.center,
+        address: selectedAddress.place_name,
+      },
+    } as never);
   };
 
   const renderSuggestion = ({ item }: { item: AddressSuggestion }) => (
@@ -113,7 +123,7 @@ export const AddressFormScreen = () => {
         {selectedAddress ? (
           <View className={styles.selectedContainer}>
             <Text className={styles.selectedLabel}>Selected Address:</Text>
-            <Text className={styles.selectedAddress}>{selectedAddress}</Text>
+            <Text className={styles.selectedAddressText}>{selectedAddress.place_name}</Text>
           </View>
         ) : null}
 
@@ -121,7 +131,7 @@ export const AddressFormScreen = () => {
           className={styles.submitButton}
           onPress={handleSubmit}
         >
-          <Text className={styles.submitButtonText}>Submit</Text>
+          <Text className={styles.submitButtonText}>Start Navigation</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -141,7 +151,7 @@ const styles = {
   suggestionText: `text-gray-800`,
   selectedContainer: `bg-blue-50 p-4 rounded-lg mb-4`,
   selectedLabel: `text-sm font-medium text-blue-800 mb-1`,
-  selectedAddress: `text-blue-900`,
+  selectedAddressText: `text-blue-900`,
   submitButton: `bg-blue-600 py-3 px-6 rounded-lg mt-4`,
   submitButtonText: `text-white text-center font-semibold text-base`,
 };
