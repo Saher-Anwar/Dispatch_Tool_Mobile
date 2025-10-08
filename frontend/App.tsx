@@ -12,7 +12,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <NavigationContainer>
-        <Stack.Navigator initialRouteName="AddressForm">
+        <Stack.Navigator initialRouteName="Home">
           <Stack.Screen name="Home" component={HomeScreen} options={{ title: 'Home' }}/>
           <Stack.Screen name="AddressForm" component={AddressFormScreen} options={{ title: 'Address Form' }}/>
         </Stack.Navigator>
