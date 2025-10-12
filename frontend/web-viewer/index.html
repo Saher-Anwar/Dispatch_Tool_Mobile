@@ -289,12 +289,19 @@
                 const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${startLng},${startLat};${endLng},${endLat}?geometries=geojson&access_token=${mapboxgl.accessToken}`;
                 
                 console.log('🛣️ Calculating route...');
+                console.log('📍 From:', startLng, startLat, 'To:', endLng, endLat);
+                console.log('🔗 URL:', url);
+                
                 const response = await fetch(url);
+                console.log('📡 Response status:', response.status);
+                
                 const data = await response.json();
+                console.log('📊 Response data:', data);
                 
                 if (data.routes && data.routes.length > 0) {
                     const route = data.routes[0];
                     console.log('✅ Route calculated:', route.distance, 'meters');
+                    console.log('🗺️ Route geometry:', route.geometry);
                     
                     // Update route on map
                     if (map.getSource('route')) {
@@ -303,11 +310,17 @@
                             properties: {},
                             geometry: route.geometry
                         });
+                        console.log('✅ Route updated on map');
+                    } else {
+                        console.log('❌ No route source found on map');
                     }
                     
                     return route;
                 } else {
-                    console.log('❌ No route found');
+                    console.log('❌ No route found in response');
+                    if (data.message) {
+                        console.log('🚨 API Error:', data.message);
+                    }
                     return null;
                 }
             } catch (error) {
@@ -340,12 +353,24 @@
                     .addTo(map);
             }
 
-            // Calculate route if we have both points and haven't calculated recently
-            if (data.destination && map.getSource('route')) {
+            // Calculate route if we have both points
+            if (data.destination) {
                 const routeKey = `${lng},${lat}-${data.destination.lng},${data.destination.lat}`;
                 if (lastRouteUpdate !== routeKey) {
                     lastRouteUpdate = routeKey;
-                    calculateRoute(lng, lat, data.destination.lng, data.destination.lat);
+                    console.log('🎯 Triggering route calculation');
+                    console.log('🗺️ Map loaded:', map.loaded());
+                    console.log('📍 Route source exists:', !!map.getSource('route'));
+                    
+                    if (map.loaded() && map.getSource('route')) {
+                        calculateRoute(lng, lat, data.destination.lng, data.destination.lat);
+                    } else {
+                        console.log('⏳ Waiting for map to load before calculating route');
+                        map.on('load', () => {
+                            console.log('✅ Map loaded, calculating route now');
+                            calculateRoute(lng, lat, data.destination.lng, data.destination.lat);
+                        });
+                    }
                 }
             }
 
